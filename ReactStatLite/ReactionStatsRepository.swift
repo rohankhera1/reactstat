@@ -87,6 +87,11 @@ enum ReactionStatsRepository {
     // MARK: - Totals
 
     static func totalReactionsInChat(chatRowId: Int64) throws -> Int {
+        // Check if this is demo data (negative ID)
+        if chatRowId == -1 {
+            return DemoData.demoAllReactions.reduce(0) { $0 + $1.count }
+        }
+        
         let db = try openDB()
         defer { if db != nil { sqlite3_close(db) } }
 
@@ -112,6 +117,11 @@ enum ReactionStatsRepository {
     }
 
     static func totalMessagesInChat(chatRowId: Int64) throws -> Int {
+        // Check if this is demo data (negative ID)
+        if chatRowId == -1 {
+            return DemoData.demoMessageCounts.values.reduce(0, +)
+        }
+        
         let db = try openDB()
         defer { if db != nil { sqlite3_close(db) } }
 
@@ -138,6 +148,11 @@ enum ReactionStatsRepository {
     // MARK: - Messages sent per person (exclude reaction rows)
 
     static func messageCountsBySender(chatRowId: Int64) throws -> [String: Int] {
+        // Check if this is demo data (negative ID)
+        if chatRowId == -1 {
+            return DemoData.demoMessageCounts
+        }
+        
         let db = try openDB()
         defer { if db != nil { sqlite3_close(db) } }
 
@@ -331,6 +346,17 @@ enum ReactionStatsRepository {
         reactionScanLimit: Int,
         messageScanLimit: Int
     ) throws -> [ReactionKind: [String: Int]] {
+        
+        // Check if this is demo data (negative ID)
+        if chatRowId == -1 {
+            var out: [ReactionKind: [String: Int]] = [:]
+            for reaction in DemoData.demoAllReactions {
+                var dict = out[reaction.kind] ?? [:]
+                dict[reaction.to, default: 0] += reaction.count
+                out[reaction.kind] = dict
+            }
+            return out
+        }
 
         let guidToSender = try buildGuidToSenderMap(chatRowId: chatRowId, messageScanLimit: messageScanLimit)
 
@@ -386,6 +412,17 @@ enum ReactionStatsRepository {
     // MARK: - Given counts for all kinds in one pass (fast SQL)
 
     private static func givenCountsByKind(chatRowId: Int64) throws -> [ReactionKind: [String: Int]] {
+        // Check if this is demo data (negative ID)
+        if chatRowId == -1 {
+            var out: [ReactionKind: [String: Int]] = [:]
+            for reaction in DemoData.demoAllReactions {
+                var dict = out[reaction.kind] ?? [:]
+                dict[reaction.from, default: 0] += reaction.count
+                out[reaction.kind] = dict
+            }
+            return out
+        }
+        
         let db = try openDB()
         defer { if db != nil { sqlite3_close(db) } }
 

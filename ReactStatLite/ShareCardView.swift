@@ -20,7 +20,7 @@ struct ShareCardView: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("ReactStat")
+                    Text("ReactStat.com")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
 
@@ -79,7 +79,7 @@ struct ShareCardView: View {
             Spacer(minLength: 0)
 
             HStack {
-                Text("Made with ReactStat")
+                Text("Made with ReactStat.com")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()

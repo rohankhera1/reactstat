@@ -40,7 +40,7 @@ private struct BrandBadge: View {
         HStack(spacing: 8) {
             Image(systemName: "bolt.fill")
                 .font(.system(size: 14, weight: .semibold))
-            Text("ReactStat")
+            Text("ReactStat.com")
                 .font(.system(size: 14, weight: .semibold))
         }
         .foregroundStyle(ShareStyle.accent)
@@ -91,7 +91,7 @@ struct StoryCoverPageView: View {
                     .font(.system(size: 20, weight: .medium))
                     .foregroundStyle(ShareStyle.secondaryText)
 
-                Text("Made with ReactStat")
+                Text("Made with ReactStat.com")
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(ShareStyle.accent)
             }
@@ -117,7 +117,7 @@ struct StoryCoverPageView: View {
                     .foregroundStyle(ShareStyle.accent)
                     .font(.system(size: 26, weight: .bold))
 
-                Text("ReactStat")
+                Text("ReactStat.com")
                     .font(.system(size: 32, weight: .semibold))
                     .foregroundStyle(ShareStyle.accent)
             }
@@ -231,7 +231,7 @@ struct StoryReactionPageView: View {
 
                 Spacer(minLength: 0)
 
-                Text("Made with ReactStat")
+                Text("Made with ReactStat.com")
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(ShareStyle.accent)
             }
@@ -269,7 +269,7 @@ struct StoryReactionPageView: View {
 
             Spacer()
 
-            Text("ReactStat")
+            Text("ReactStat.com")
                 .font(.system(size: 20, weight: .semibold))
                 .foregroundStyle(ShareStyle.accent)
         }

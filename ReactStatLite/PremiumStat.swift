@@ -3,7 +3,7 @@ import Foundation
 struct PremiumStat: Identifiable {
     enum Kind {
         case biggestGlazer
-        case buddingRomance
+        case biggestMutualGlazer
         case reactionKing
         case mostIgnored
         case reactionPersonality

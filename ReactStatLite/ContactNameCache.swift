@@ -116,6 +116,11 @@ final class ContactNameCache {
         guard !trimmed.isEmpty else { return "Unknown" }
 
         if trimmed == "Me" { return "Me" }
+        
+        // Check if this is a demo phone number
+        if let demoName = DemoData.demoPhoneMapping[trimmed] {
+            return demoName
+        }
 
         if trimmed.contains("@") {
             let k = trimmed.lowercased()

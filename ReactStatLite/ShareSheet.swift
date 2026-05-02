@@ -529,7 +529,7 @@ private struct StoryAdvancedPageView: View {
 
                     Spacer()
 
-                    Text("ReactStat")
+                    Text("ReactStat.com")
                         .font(.system(size: 20, weight: .semibold))
                         .foregroundStyle(.blue)
                 }
@@ -578,7 +578,7 @@ private struct StoryAdvancedPageView: View {
 
                 Spacer()
 
-                Text("Made with ReactStat")
+                Text("Made with ReactStat.com")
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(.blue)
             }

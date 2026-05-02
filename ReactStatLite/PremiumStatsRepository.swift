@@ -28,6 +28,11 @@ enum PremiumStatsRepository {
         reactionScanLimit: Int = 120_000,
         messageScanLimit: Int = 120_000
     ) throws -> [PremiumStat] {
+        
+        // Check if this is demo data (negative ID)
+        if chatRowId == -1 {
+            return try createDemoPremiumStats()
+        }
 
         // Build guid -> sender map once
         let guidToSender = try buildGuidToSenderMap(chatRowId: chatRowId, messageScanLimit: messageScanLimit)
@@ -59,7 +64,7 @@ enum PremiumStatsRepository {
 
         // Existing premium stats
         let glazer = biggestGlazerOrFallback(edges: laughEdges, baseline: msgBaselineShare)
-        let romance = buddingRomanceOrFallback(edges: laughEdges, baseline: msgBaselineShare)
+        let romance = biggestMutualGlazerOrFallback(edges: laughEdges, baseline: msgBaselineShare)
 
         // New premium stats
         let ignored = mostIgnoredOrFallback(
@@ -161,17 +166,17 @@ enum PremiumStatsRepository {
                            score: best.score)
     }
 
-    // MARK: - Budding Romance
+    // MARK: - Biggest Mutual Glazer
 
-    private static func buddingRomanceOrFallback(
+    private static func biggestMutualGlazerOrFallback(
         edges: [DirectedEdge],
         baseline: (String) -> Double
     ) -> PremiumStat {
         let minEachDirection = 2
 
         if edges.isEmpty {
-            return PremiumStat(kind: .buddingRomance,
-                               title: "Budding Romance",
+            return PremiumStat(kind: .biggestMutualGlazer,
+                               title: "Biggest Mutual Glazers",
                                subtitle: "Not enough 😂 reactions in this chat yet.",
                                score: 0)
         }
@@ -214,8 +219,8 @@ enum PremiumStatsRepository {
         }
 
         guard let best else {
-            return PremiumStat(kind: .buddingRomance,
-                               title: "Budding Romance",
+            return PremiumStat(kind: .biggestMutualGlazer,
+                               title: "Biggest Mutual Glazers",
                                subtitle: "Not enough two-way 😂 yet.",
                                score: 0)
         }
@@ -234,8 +239,8 @@ enum PremiumStatsRepository {
 
         let subtitle = "\(best.a) ↔ \(best.b) (😂 \(best.ab)/\(best.ba), \(pctA)%/\(pctB)% of their 😂 reactions, \(phrase))"
 
-        return PremiumStat(kind: .buddingRomance,
-                           title: "Budding Romance",
+        return PremiumStat(kind: .biggestMutualGlazer,
+                           title: "Biggest Mutual Glazers",
                            subtitle: subtitle,
                            score: best.score)
     }
@@ -786,5 +791,72 @@ enum PremiumStatsRepository {
         }
 
         return map
+    }
+    
+    // MARK: - Demo Data Support
+    
+    private static func createDemoPremiumStats() throws -> [PremiumStat] {
+        // Create demo laugh edges from the predefined data
+        let laughEdges = DemoData.demoLaughReactions.map { reaction in
+            DirectedEdge(fromName: reaction.from, toName: reaction.to, count: reaction.count)
+        }
+        
+        // Create message counts from demo data
+        let msgCounts = DemoData.demoMessageCounts
+        let totalMsgs = max(1, msgCounts.values.reduce(0, +))
+        let participantCount = max(1, msgCounts.count)
+        
+        func msgBaselineShare(_ person: String) -> Double {
+            let m = msgCounts[person] ?? 0
+            let b = Double(m) / Double(totalMsgs)
+            return max(0.0005, b)
+        }
+        
+        // Generate stats using the same logic as real data
+        let glazer = biggestGlazerOrFallback(edges: laughEdges, baseline: msgBaselineShare)
+        let romance = biggestMutualGlazerOrFallback(edges: laughEdges, baseline: msgBaselineShare)
+        
+        // Create demo reaction aggregates for new stats
+        var aggs = ReactionAggregates()
+        for reaction in DemoData.demoAllReactions {
+            aggs.totalReactions += reaction.count
+            aggs.totalByKind[reaction.kind, default: 0] += reaction.count
+            aggs.givenByPerson[reaction.from, default: 0] += reaction.count
+            aggs.receivedByPerson[reaction.to, default: 0] += reaction.count
+            
+            var inner = aggs.givenByPersonByKind[reaction.from] ?? [:]
+            inner[reaction.kind, default: 0] += reaction.count
+            aggs.givenByPersonByKind[reaction.from] = inner
+        }
+        
+        let ignored = mostIgnoredOrFallback(
+            msgCounts: msgCounts,
+            totalMsgs: totalMsgs,
+            receivedByPerson: aggs.receivedByPerson,
+            totalReactions: aggs.totalReactions
+        )
+        
+        let king = reactionKingOrFallback(
+            msgCounts: msgCounts,
+            totalMsgs: totalMsgs,
+            receivedByPerson: aggs.receivedByPerson,
+            totalReactions: aggs.totalReactions
+        )
+        
+        let personality = reactionPersonalityOrFallback(
+            givenByPersonByKind: aggs.givenByPersonByKind,
+            totalByKind: aggs.totalByKind,
+            totalReactions: aggs.totalReactions
+        )
+        
+        let watcher = silentWatcherOrFallback(
+            msgCounts: msgCounts,
+            totalMsgs: totalMsgs,
+            participantCount: participantCount,
+            givenByPerson: aggs.givenByPerson
+        )
+        
+        // Order matters (what shows first)
+        return [glazer, romance, king, ignored, personality, watcher]
     }
 }

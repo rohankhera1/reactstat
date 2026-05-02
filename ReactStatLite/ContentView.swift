@@ -19,6 +19,12 @@ struct ContentView: View {
 
     @State private var searchText: String = ""
 
+    @State private var showingYourProfile = false
+    @State private var yourProfile: PersonalityProfile?
+    @State private var loadingYourProfile = false
+    @State private var yourProfileError: String?
+    @AppStorage("anthropicAPIKey") private var apiKey: String = ""
+
     var body: some View {
         Group {
             if !hasMessagesAccess {
@@ -52,13 +58,19 @@ struct ContentView: View {
                             }
 
                             if filteredChats.isEmpty && !isLoadingChats && chatLoadError == nil {
-                                VStack(spacing: 10) {
+                                VStack(spacing: 16) {
                                     Text("No chats found.")
                                         .font(.headline)
 
                                     Text("If this seems wrong, double-check Full Disk Access and click Retry.")
                                         .foregroundStyle(.secondary)
                                         .multilineTextAlignment(.center)
+                                    
+                                    Button("🎬 Load Demo for Ad") {
+                                        loadDemoData()
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .help("Load demo data with world leaders for recording ads")
                                 }
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 30)
@@ -92,10 +104,23 @@ struct ContentView: View {
                     .navigationTitle("ReactStat")
                     .toolbar {
                         ToolbarItem(placement: .primaryAction) {
-                            Button("Retry") {
-                                refreshAccessAndReload()
+                            HStack {
+                                Button("👤 Your Profile") {
+                                    showingYourProfile = true
+                                    loadYourProfile()
+                                }
+                                .help("See your personality profile across all chats")
+
+                                Button("🎬 Demo") {
+                                    loadDemoData()
+                                }
+                                .help("Load demo data with world leaders")
+
+                                Button("Retry") {
+                                    refreshAccessAndReload()
+                                }
+                                .help("Re-check permissions and reload")
                             }
-                            .help("Re-check permissions and reload")
                         }
 
                         ToolbarItem(placement: .secondaryAction) {
@@ -116,6 +141,14 @@ struct ContentView: View {
                                 prompt: "Search chats")
                     .task {
                         refreshAccessAndReload()
+                    }
+                    .sheet(isPresented: $showingYourProfile) {
+                        YourPersonalitySheet(
+                            profile: yourProfile,
+                            isLoading: loadingYourProfile,
+                            error: yourProfileError,
+                            onRegenerate: { loadYourProfile() }
+                        )
                     }
                 }
             }
@@ -242,6 +275,37 @@ struct ContentView: View {
                 }
             }
         }
+    }
+    
+    @MainActor
+    private func loadYourProfile() {
+        yourProfile = nil
+        yourProfileError = nil
+        loadingYourProfile = true
+
+        let capturedKey = apiKey
+        Task.detached(priority: .utility) {
+            do {
+                let profile = try await PersonalityStatsRepository.yourCrossGroupProfile(apiKey: capturedKey)
+                await MainActor.run {
+                    self.yourProfile = profile
+                    self.loadingYourProfile = false
+                }
+            } catch {
+                await MainActor.run {
+                    self.yourProfileError = error.localizedDescription
+                    self.loadingYourProfile = false
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func loadDemoData() {
+        let demoChat = DemoData.createDemoChat()
+        self.chats = [demoChat]
+        self.chatLoadError = nil
+        self.isLoadingChats = false
     }
 }
 
