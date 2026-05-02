@@ -21,6 +21,11 @@ struct ChatDetailView: View {
     @State private var premiumStats: [PremiumStat] = []
     @State private var loadingPremium = false
 
+    @State private var personalityProfiles: [PersonalityProfile] = []
+    @State private var loadingPersonality = true
+    @State private var personalityError: String?
+    @AppStorage("anthropicAPIKey") private var apiKey: String = ""
+
     @State private var showingShare = false
 
     @State private var contactsStatus: CNAuthorizationStatus =
@@ -135,6 +140,12 @@ struct ChatDetailView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+
+                PersonalityProfilesSection(
+                    profiles: personalityProfiles,
+                    isLoading: loadingPersonality,
+                    error: personalityError
+                )
 
                 HStack(spacing: 10) {
                     LoadingPill(title: "Given", isLoading: loadingGiven)
@@ -298,6 +309,7 @@ struct ChatDetailView: View {
         loadingGiven = true
         loadingReceived = true
         loadingPremium = true
+        loadingPersonality = true
 
         totalMessages = 0
         totalReactions = 0
@@ -305,6 +317,8 @@ struct ChatDetailView: View {
         givenRatiosByKind = [:]
         receivedRatiosByKind = [:]
         premiumStats = []
+        personalityProfiles = []
+        personalityError = nil
 
         Task.detached(priority: .utility) {
             ContactNameCache.shared.warmIfNeeded()
@@ -382,6 +396,24 @@ struct ChatDetailView: View {
                 }
             } catch {
                 await MainActor.run { self.loadingPremium = false }
+            }
+        }
+
+        let capturedKey = apiKey
+        Task.detached(priority: .utility) {
+            do {
+                let profiles = try await PersonalityStatsRepository.personalityProfiles(
+                    chatRowId: chat.id, apiKey: capturedKey
+                )
+                await MainActor.run {
+                    self.personalityProfiles = profiles
+                    self.loadingPersonality = false
+                }
+            } catch {
+                await MainActor.run {
+                    self.personalityError = error.localizedDescription
+                    self.loadingPersonality = false
+                }
             }
         }
     }
