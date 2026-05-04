@@ -24,7 +24,6 @@ struct ChatDetailView: View {
     @State private var personalityProfiles: [PersonalityProfile] = []
     @State private var loadingPersonality = true
     @State private var personalityError: String?
-    @AppStorage("anthropicAPIKey") private var apiKey: String = ""
 
     @State private var showingShare = false
 
@@ -399,11 +398,10 @@ struct ChatDetailView: View {
             }
         }
 
-        let capturedKey = apiKey
         Task.detached(priority: .utility) {
             do {
                 let profiles = try await PersonalityStatsRepository.personalityProfiles(
-                    chatRowId: chat.id, apiKey: capturedKey
+                    chatRowId: chat.id
                 )
                 await MainActor.run {
                     self.personalityProfiles = profiles

@@ -6,14 +6,10 @@ struct PersonalityProfilesSection: View {
     let profiles: [PersonalityProfile]
     let isLoading: Bool
     var error: String? = nil
-    @AppStorage("anthropicAPIKey") private var apiKey: String = ""
 
     var body: some View {
         GroupBox("Personality Profiles") {
-            if apiKey.isEmpty {
-                APIKeySetupCard()
-                    .padding(.vertical, 6)
-            } else if isLoading {
+            if isLoading {
                 PersonalityLoadingCard()
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 6)
@@ -27,9 +23,6 @@ struct PersonalityProfilesSection: View {
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
-                    Button("Clear API key and re-enter") { apiKey = "" }
-                        .font(.caption)
-                        .buttonStyle(.bordered)
                 }
                 .padding(.vertical, 6)
             } else if profiles.isEmpty {
@@ -133,57 +126,6 @@ private struct TraitBar: View {
     }
 }
 
-// MARK: - API key setup card
-
-struct APIKeySetupCard: View {
-    @AppStorage("anthropicAPIKey") private var apiKey: String = ""
-    @State private var draft = ""
-    @State private var isEditing = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label("AI Personality Analysis", systemImage: "sparkles")
-                .font(.headline)
-
-            Text("Paste your Anthropic API key to generate unique, AI-written personality profiles for everyone in the chat.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            HStack(spacing: 8) {
-                SecureField("sk-ant-…", text: $draft)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(.caption, design: .monospaced))
-                    .onSubmit { save() }
-
-                Button("Save") { save() }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
-            }
-
-            Link("Get a free API key at console.anthropic.com",
-                 destination: URL(string: "https://console.anthropic.com")!)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.thinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(.quaternary, lineWidth: 1)
-        )
-    }
-
-    private func save() {
-        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        apiKey = trimmed
-        draft = ""
-    }
-}
-
 // MARK: - Loading card
 
 struct PersonalityLoadingCard: View {
@@ -210,65 +152,224 @@ struct PersonalityLoadingCard: View {
     }
 }
 
-// MARK: - Cross-chat "Your Profile" sheet
+// MARK: - Cross-chat "Your Life Analysis" sheet
 
 struct YourPersonalitySheet: View {
-    let profile: PersonalityProfile?
+    let analysis: LifeAnalysis?
     let isLoading: Bool
     let error: String?
     let onRegenerate: () -> Void
-    @AppStorage("anthropicAPIKey") private var apiKey: String = ""
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text("Your Personality Profile")
-                    .font(.title.bold())
-                Spacer()
-                Button { dismiss() } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(.secondary)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Your Life Analysis")
+                            .font(.title.bold())
+                        if let analysis {
+                            Text("\(analysis.messageCount) messages · \(analysis.dateRange)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("Built from your messages across all chats and DMs.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer()
+                    Button { dismiss() } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
-            }
 
-            Text("Built from your messages across all chats.")
-                .foregroundStyle(.secondary)
-                .font(.subheadline)
+                if isLoading {
+                    LifeAnalysisLoadingCard()
+                } else if let error {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("Generation failed", systemImage: "exclamationmark.triangle")
+                            .font(.headline)
+                            .foregroundStyle(.red)
+                        Text(error)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                } else if let analysis {
+                    LifeSectionCard(
+                        icon: "person.fill",
+                        title: "Who You Are",
+                        color: .blue,
+                        archetype: analysis.archetype,
+                        content: analysis.personality
+                    )
 
-            if apiKey.isEmpty {
-                APIKeySetupCard()
-            } else if isLoading {
-                PersonalityLoadingCard()
-            } else if let error {
-                VStack(alignment: .leading, spacing: 8) {
-                    Label("Generation failed", systemImage: "exclamationmark.triangle")
-                        .font(.headline)
-                        .foregroundStyle(.red)
-                    Text(error)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Button("Clear API key and re-enter") { apiKey = "" }
+                    LifeSectionCard(
+                        icon: "calendar",
+                        title: "Your Story So Far",
+                        color: .purple,
+                        content: analysis.timeline
+                    )
+
+                    LifeSectionCard(
+                        icon: "sparkles",
+                        title: "Where You're Headed",
+                        color: .orange,
+                        content: analysis.foresight
+                    )
+
+                    LifeTraitBars(analysis: analysis)
+
+                    Button("Regenerate") { onRegenerate() }
                         .font(.caption)
                         .buttonStyle(.bordered)
+                } else {
+                    Text("Not enough messages found to build an analysis.")
+                        .foregroundStyle(.secondary)
                 }
-            } else if let profile {
-                PersonalityCardView(profile: profile)
-                Button("Regenerate") { onRegenerate() }
-                    .font(.caption)
-                    .buttonStyle(.bordered)
-            } else {
-                Text("Not enough messages found to build a profile.")
-                    .foregroundStyle(.secondary)
+
+                Spacer()
+            }
+            .padding()
+        }
+        .frame(minWidth: 560, idealWidth: 700, maxWidth: 900, minHeight: 680, idealHeight: 820, maxHeight: .infinity)
+    }
+}
+
+// MARK: - Section card
+
+private struct LifeSectionCard: View {
+    let icon: String
+    let title: String
+    let color: Color
+    var archetype: String = ""
+    let content: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(title, systemImage: icon)
+                .font(.headline)
+                .foregroundStyle(color)
+
+            if !archetype.isEmpty {
+                Text(archetype)
+                    .font(.title2.bold())
+                    .foregroundStyle(.primary)
             }
 
-            Spacer()
+            Text(content)
+                .font(.subheadline)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
         }
-        .padding()
-        .frame(minWidth: 380, minHeight: 420)
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.thinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(.quaternary, lineWidth: 1)
+        )
+    }
+}
+
+// MARK: - Trait bars for life analysis
+
+private struct LifeTraitBars: View {
+    let analysis: LifeAnalysis
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
+            } label: {
+                Label(expanded ? "Hide signals" : "Show underlying signals",
+                      systemImage: expanded ? "chevron.up" : "chart.bar.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+
+            if expanded {
+                VStack(spacing: 5) {
+                    TraitBar(label: "Warmth",         value: analysis.warmth,         color: .orange)
+                    TraitBar(label: "Expressiveness", value: analysis.expressiveness, color: .pink)
+                    TraitBar(label: "Verbosity",      value: analysis.verbosity,      color: .blue)
+                    TraitBar(label: "Curiosity",      value: analysis.curiosity,      color: .purple)
+                    TraitBar(label: "Enthusiasm",     value: analysis.enthusiasm,     color: .yellow)
+                }
+                .padding(.horizontal, 4)
+            }
+        }
+    }
+}
+
+// MARK: - Life analysis loading card
+
+struct LifeAnalysisLoadingCard: View {
+    @State private var elapsed: Int = 0
+
+    // Approximate which stage we're in based on elapsed time.
+    private var stageText: String {
+        switch elapsed {
+        case 0..<3:  return "Reading your full message history…"
+        case 3..<7:  return "Grouping messages by time period…"
+        default:     return "Claude Sonnet is writing your analysis…"
+        }
+    }
+
+    // Count down from an estimated 120-second Sonnet call that starts around 7s in.
+    private var timeRemainingText: String {
+        guard elapsed >= 7 else { return "" }
+        let claudeElapsed = elapsed - 7
+        let remaining = 120 - claudeElapsed
+        if remaining > 0 { return "~\(remaining)s remaining" }
+        return "finishing up…"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                ProgressView().controlSize(.large)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(stageText)
+                        .font(.headline)
+                        .animation(.default, value: stageText)
+                    HStack(spacing: 8) {
+                        Text("\(elapsed)s elapsed")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.tertiary)
+                        if !timeRemainingText.isEmpty {
+                            Text("·").font(.caption).foregroundStyle(.tertiary)
+                            Text(timeRemainingText)
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                Spacer()
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, minHeight: 80, alignment: .leading)
+        .background(.thinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(.quaternary, lineWidth: 1)
+        )
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                elapsed += 1
+            }
+        }
     }
 }

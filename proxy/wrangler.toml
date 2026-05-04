@@ -1,0 +1,11 @@
+name = "reactstat-proxy"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+[[kv_namespaces]]
+binding = "RATE_LIMIT_KV"
+id = "729418d6353a4eef868da2e2194f6d10"
+
+# Set secrets via CLI (never commit these):
+#   wrangler secret put ANTHROPIC_API_KEY
+#   wrangler secret put APP_SECRET

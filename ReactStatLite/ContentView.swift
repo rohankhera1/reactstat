@@ -20,10 +20,9 @@ struct ContentView: View {
     @State private var searchText: String = ""
 
     @State private var showingYourProfile = false
-    @State private var yourProfile: PersonalityProfile?
-    @State private var loadingYourProfile = false
+    @State private var yourAnalysis: LifeAnalysis?
+    @State private var loadingYourProfile = true
     @State private var yourProfileError: String?
-    @AppStorage("anthropicAPIKey") private var apiKey: String = ""
 
     var body: some View {
         Group {
@@ -144,7 +143,7 @@ struct ContentView: View {
                     }
                     .sheet(isPresented: $showingYourProfile) {
                         YourPersonalitySheet(
-                            profile: yourProfile,
+                            analysis: yourAnalysis,
                             isLoading: loadingYourProfile,
                             error: yourProfileError,
                             onRegenerate: { loadYourProfile() }
@@ -279,16 +278,15 @@ struct ContentView: View {
     
     @MainActor
     private func loadYourProfile() {
-        yourProfile = nil
+        yourAnalysis = nil
         yourProfileError = nil
         loadingYourProfile = true
 
-        let capturedKey = apiKey
         Task.detached(priority: .utility) {
             do {
-                let profile = try await PersonalityStatsRepository.yourCrossGroupProfile(apiKey: capturedKey)
+                let analysis = try await PersonalityStatsRepository.yourFullLifeAnalysis()
                 await MainActor.run {
-                    self.yourProfile = profile
+                    self.yourAnalysis = analysis
                     self.loadingYourProfile = false
                 }
             } catch {
