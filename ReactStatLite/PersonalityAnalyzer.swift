@@ -44,6 +44,44 @@ enum PersonalityAnalyzer {
             .filter { !$0.isEmpty && $0 != "\u{FFFC}" }
     }
 
+    // Extracts person names from messages using NER, sorted by frequency.
+    // Samples up to 10k messages for performance; counts occurrences across all messages.
+    static func extractTopNames(from messages: [String], topN: Int = 30) -> [(name: String, count: Int)] {
+        let tagger = NLTagger(tagSchemes: [.nameType])
+        var candidates: Set<String> = []
+
+        let nerSample = messages.count > 10_000
+            ? Array(messages.shuffled().prefix(10_000))
+            : messages
+
+        for message in nerSample {
+            guard message.count > 4 else { continue }
+            tagger.string = message
+            tagger.enumerateTags(
+                in: message.startIndex..<message.endIndex,
+                unit: .word, scheme: .nameType,
+                options: [.omitWhitespace, .omitPunctuation]
+            ) { tag, range in
+                if tag == .personalName {
+                    let name = String(message[range])
+                        .trimmingCharacters(in: .punctuationCharacters)
+                    if name.count >= 3 { candidates.insert(name) }
+                }
+                return true
+            }
+        }
+
+        // Count actual occurrences across ALL messages for accurate ranking.
+        return candidates.map { name -> (name: String, count: Int) in
+            let count = messages.filter { $0.localizedCaseInsensitiveContains(name) }.count
+            return (name: name, count: count)
+        }
+        .filter { $0.count >= 3 }
+        .sorted { $0.count > $1.count }
+        .prefix(topN)
+        .map { $0 }
+    }
+
     // Compute trait scores for a message collection.
     static func traits(for messages: [String]) -> PersonalityTraits? {
         let clean = cleaned(messages)
