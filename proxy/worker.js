@@ -12,7 +12,7 @@ export default {
     const isLife = endpointType === "life-analysis";
     const rateLimitKey = `rl:${ip}:${endpointType}`;
     const windowSeconds = isLife ? 86400 : 3600;
-    const maxRequests   = isLife ? 3 : 50;
+    const maxRequests   = isLife ? 15 : 100;
 
     const current = parseInt(await env.RATE_LIMIT_KV.get(rateLimitKey) ?? "0");
     if (current >= maxRequests)

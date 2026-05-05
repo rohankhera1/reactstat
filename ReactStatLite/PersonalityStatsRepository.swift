@@ -138,6 +138,7 @@ enum PersonalityStatsRepository {
             personality: result.personality,
             timeline: result.timeline,
             foresight: result.foresight,
+            patterns: result.patterns,
             messageCount: cleanedUser.count, dateRange: dateRange,
             warmth: traits.warmth, expressiveness: traits.expressiveness,
             verbosity: traits.verbosity, curiosity: traits.curiosity,
@@ -268,7 +269,7 @@ enum PersonalityStatsRepository {
     }
 
     private static func groupByTimePeriod(
-        _ pairs: [(text: String, date: Date)],
+        _ pairs: [(text: String, date: Date, isDM: Bool)],
         prioritizingNames names: [String] = []
     ) -> [TimePeriod] {
         guard pairs.count >= 2 else { return [] }
@@ -278,10 +279,9 @@ enum PersonalityStatsRepository {
             [.month], from: pairs.first!.date, to: pairs.last!.date
         ).month ?? 0
 
-        // Use quarterly buckets for histories longer than 2 years so we cover the full span.
         let useQuarterly = spanMonths > 24
 
-        var buckets: [Date: [String]] = [:]
+        var buckets: [Date: [(text: String, date: Date, isDM: Bool)]] = [:]
         for pair in pairs {
             var comps = DateComponents()
             comps.year = cal.component(.year, from: pair.date)
@@ -289,16 +289,15 @@ enum PersonalityStatsRepository {
             comps.month = useQuarterly ? ((month - 1) / 3) * 3 + 1 : month
             comps.day = 1
             if let bucket = cal.date(from: comps) {
-                buckets[bucket, default: []].append(pair.text)
+                buckets[bucket, default: []].append(pair)
             }
         }
 
-        var sorted = buckets.keys.sorted().map { (key: $0, messages: buckets[$0]!) }
+        var sorted = buckets.keys.sorted().map { (key: $0, entries: buckets[$0]!) }
 
-        // Cap at 48 buckets (~12 years quarterly / ~4 years monthly) keeping most recent.
         if sorted.count > 48 { sorted = Array(sorted.suffix(48)) }
 
-        let priorityNames = names  // capture for closure
+        let priorityNames = names
 
         return sorted.map { bucket in
             let label: String
@@ -311,18 +310,43 @@ enum PersonalityStatsRepository {
                 label = periodFormatter.string(from: bucket.key)
             }
 
-            let clean = bucket.messages.filter {
-                $0 != "\u{FFFC}" && !$0.trimmingCharacters(in: .whitespaces).isEmpty
+            let clean = bucket.entries.filter {
+                $0.text != "\u{FFFC}" && !$0.text.trimmingCharacters(in: .whitespaces).isEmpty
             }
 
-            // Score every snippet by information density, then take the top 15.
-            // Name bonus ensures important people surface even in busy periods.
-            let sample = clean
-                .map { snippet -> (text: String, score: Double) in
-                    (snippet, snippetScore(snippet, priorityNames: priorityNames))
+            // Score every snippet; DMs receive a 3x multiplier inside snippetScore.
+            let scored = clean.enumerated().map { i, entry in
+                (idx: i, text: entry.text, date: entry.date,
+                 score: snippetScore(entry.text, priorityNames: priorityNames, isDM: entry.isDM))
+            }
+
+            // Stratified sampling: take top-2 per ISO week for temporal diversity,
+            // then fill remaining slots (up to 20) from unseen snippets ranked by score.
+            var byWeek: [Int: [(idx: Int, score: Double)]] = [:]
+            for s in scored {
+                let weekKey = cal.component(.year, from: s.date) * 100
+                           + cal.component(.weekOfYear, from: s.date)
+                byWeek[weekKey, default: []].append((s.idx, s.score))
+            }
+
+            var selectedIdx: Set<Int> = []
+            for weekSnippets in byWeek.values {
+                for item in weekSnippets.sorted(by: { $0.score > $1.score }).prefix(2) {
+                    selectedIdx.insert(item.idx)
                 }
+            }
+
+            if selectedIdx.count < 20 {
+                for s in scored.sorted(by: { $0.score > $1.score }) where !selectedIdx.contains(s.idx) {
+                    if selectedIdx.count >= 20 { break }
+                    selectedIdx.insert(s.idx)
+                }
+            }
+
+            let sample = scored
+                .filter { selectedIdx.contains($0.idx) }
                 .sorted { $0.score > $1.score }
-                .prefix(15)
+                .prefix(20)
                 .map { String($0.text.prefix(650)) }
 
             return TimePeriod(label: label, samples: Array(sample))
@@ -331,7 +355,7 @@ enum PersonalityStatsRepository {
 
     // Fetches ALL messages (both sides of every conversation) and returns ±1 conversation
     // snippets anchored on each of the user's messages — so Claude sees context, not bare lines.
-    private static func fetchAllMessagesForContext() throws -> [(text: String, date: Date)] {
+    private static func fetchAllMessagesForContext() throws -> [(text: String, date: Date, isDM: Bool)] {
         let db = try openDB()
         defer { if db != nil { sqlite3_close(db) } }
 
@@ -383,13 +407,35 @@ enum PersonalityStatsRepository {
             )
         }
 
-        // For each of the user's messages, build a ±2 conversation snippet.
-        var snippets: [(text: String, date: Date)] = []
+        struct Collapsed { var text: String; var date: Date; var isFromMe: Bool; var sender: String }
+
+        var snippets: [(text: String, date: Date, isDM: Bool)] = []
         for messages in chatBuckets.values {
-            for (i, msg) in messages.enumerated() where msg.isFromMe {
+            // isDM: exactly 1 unique non-me sender handle in this chat.
+            let uniqueSenders = Set(messages.filter { !$0.isFromMe }.map { $0.sender })
+            let isDM = uniqueSenders.count == 1
+
+            // Collapse consecutive user message bursts within 10 min into single entries.
+            var collapsed: [Collapsed] = []
+            for msg in messages {
+                if msg.isFromMe,
+                   let last = collapsed.last, last.isFromMe,
+                   msg.date.timeIntervalSince(last.date) < 600 {
+                    collapsed[collapsed.count - 1] = Collapsed(
+                        text: last.text + " " + msg.text,
+                        date: last.date, isFromMe: true, sender: last.sender
+                    )
+                } else {
+                    collapsed.append(Collapsed(text: msg.text, date: msg.date,
+                                               isFromMe: msg.isFromMe, sender: msg.sender))
+                }
+            }
+
+            // Build ±2 conversation windows around each collapsed user message.
+            for (i, msg) in collapsed.enumerated() where msg.isFromMe {
                 let start  = max(0, i - 2)
-                let end    = min(messages.count - 1, i + 2)
-                let window = messages[start...end]
+                let end    = min(collapsed.count - 1, i + 2)
+                let window = collapsed[start...end]
 
                 let formatted = window.map { m -> String in
                     let name: String
@@ -402,7 +448,7 @@ enum PersonalityStatsRepository {
                     return "\(name): \(redactOffensiveContent(String(m.text.prefix(120))))"
                 }.joined(separator: "\n")
 
-                snippets.append((text: formatted, date: msg.date))
+                snippets.append((text: formatted, date: msg.date, isDM: isDM))
             }
         }
         return snippets.sorted { $0.date < $1.date }
@@ -415,18 +461,27 @@ enum PersonalityStatsRepository {
         guard let db = try? openDB() else { return [] }
         defer { if db != nil { sqlite3_close(db) } }
 
-        // Count total AND 1:1 DM messages separately.
-        // DM chats = chats with exactly 1 handle (the other person).
+        // Count total msgs, DM msgs, and shared group chats all in one pass.
+        // DM chats = chats with exactly 1 handle. Group chats = 2+ handles.
         let sql = """
+        WITH dm_chats AS (
+            SELECT chat_id FROM chat_handle_join
+            GROUP BY chat_id HAVING COUNT(*) = 1
+        ),
+        group_chats AS (
+            SELECT chat_id FROM chat_handle_join
+            GROUP BY chat_id HAVING COUNT(*) > 1
+        )
         SELECT h.id,
                COUNT(DISTINCT m.ROWID) AS total_msgs,
                COUNT(DISTINCT CASE
-                   WHEN cmj.chat_id IN (
-                       SELECT chat_id FROM chat_handle_join
-                       GROUP BY chat_id HAVING COUNT(*) = 1
-                   ) THEN m.ROWID END) AS dm_msgs,
-               MIN(m.date)  AS first_date,
-               MAX(m.date)  AS last_date
+                   WHEN cmj.chat_id IN (SELECT chat_id FROM dm_chats)
+                   THEN m.ROWID END) AS dm_msgs,
+               MIN(m.date) AS first_date,
+               MAX(m.date) AS last_date,
+               COUNT(DISTINCT CASE
+                   WHEN cmj.chat_id IN (SELECT chat_id FROM group_chats)
+                   THEN cmj.chat_id END) AS shared_group_chats
         FROM handle h
         JOIN message m ON m.handle_id = h.ROWID
         JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
@@ -441,7 +496,7 @@ enum PersonalityStatsRepository {
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
         defer { sqlite3_finalize(stmt) }
 
-        struct Raw { let handle: String; let total: Int; let dm: Int; let first: Date; let last: Date }
+        struct Raw { let handle: String; let total: Int; let dm: Int; let first: Date; let last: Date; let groupChats: Int }
         var raw: [Raw] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
             guard let c = sqlite3_column_text(stmt, 0) else { continue }
@@ -450,11 +505,12 @@ enum PersonalityStatsRepository {
                 return Date(timeIntervalSinceReferenceDate: s)
             }
             raw.append(Raw(
-                handle: String(cString: c),
-                total: Int(sqlite3_column_int(stmt, 1)),
-                dm:    Int(sqlite3_column_int(stmt, 2)),
-                first: toDate(sqlite3_column_int64(stmt, 3)),
-                last:  toDate(sqlite3_column_int64(stmt, 4))
+                handle:     String(cString: c),
+                total:      Int(sqlite3_column_int(stmt, 1)),
+                dm:         Int(sqlite3_column_int(stmt, 2)),
+                first:      toDate(sqlite3_column_int64(stmt, 3)),
+                last:       toDate(sqlite3_column_int64(stmt, 4)),
+                groupChats: Int(sqlite3_column_int(stmt, 5))
             ))
         }
 
@@ -462,7 +518,7 @@ enum PersonalityStatsRepository {
         // For single-word names (e.g. "Nathan"), use the handle as the merge key so that two
         // different people with the same first name stay as separate entries. Full names
         // (containing a space) can safely be merged across phone/email handles.
-        struct Merged { var total: Int; var dm: Int; var first: Date; var last: Date; var displayName: String }
+        struct Merged { var total: Int; var dm: Int; var first: Date; var last: Date; var displayName: String; var sharedGroupChats: Int }
         var merged: [String: Merged] = [:]
         for r in raw {
             let name = ContactNameCache.shared.resolve(r.handle)
@@ -471,16 +527,12 @@ enum PersonalityStatsRepository {
             if let ex = merged[key] {
                 merged[key] = Merged(total: ex.total + r.total, dm: ex.dm + r.dm,
                                      first: min(ex.first, r.first), last: max(ex.last, r.last),
-                                     displayName: ex.displayName)
+                                     displayName: ex.displayName,
+                                     sharedGroupChats: max(ex.sharedGroupChats, r.groupChats))
             } else {
                 merged[key] = Merged(total: r.total, dm: r.dm, first: r.first, last: r.last,
-                                     displayName: name)
+                                     displayName: name, sharedGroupChats: r.groupChats)
             }
-        }
-
-        var sharedChats: [String: Int] = [:]
-        for chat in groupChats {
-            for member in chat.members { sharedChats[member, default: 0] += 1 }
         }
 
         let recentCutoff = Date().addingTimeInterval(-90 * 24 * 3600)
@@ -491,7 +543,7 @@ enum PersonalityStatsRepository {
                 dmMessageCount: m.dm,
                 firstSeen: quarterLabel(for: m.first),
                 lastSeen: m.last >= recentCutoff ? "present" : quarterLabel(for: m.last),
-                sharedGroupChats: sharedChats[m.displayName, default: 0]
+                sharedGroupChats: m.sharedGroupChats
             )
         }
         .sorted { $0.messageCount > $1.messageCount }
@@ -501,7 +553,7 @@ enum PersonalityStatsRepository {
 
     // Scores a ±2 conversation snippet by information density.
     // Higher = more worth sending to Claude. Name bonus ensures important people surface.
-    private static func snippetScore(_ snippet: String, priorityNames: [String]) -> Double {
+    private static func snippetScore(_ snippet: String, priorityNames: [String], isDM: Bool) -> Double {
         let lines = snippet.split(separator: "\n", omittingEmptySubsequences: true)
 
         // Primary signal: quality of the user's own message in the snippet.
@@ -521,7 +573,8 @@ enum PersonalityStatsRepository {
             score += 5.0
         }
 
-        return score
+        // DM conversations carry far stronger relationship signal than group chats.
+        return score * (isDM ? 3.0 : 1.0)
     }
 
     // MARK: - Content redaction

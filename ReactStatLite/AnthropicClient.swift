@@ -48,7 +48,7 @@ enum AnthropicClient {
         groupChats: [(chatName: String, members: [String])],
         totalMessages: Int,
         dateRange: String
-    ) async throws -> (archetype: String, personality: String, timeline: String, foresight: String) {
+    ) async throws -> (archetype: String, personality: String, timeline: String, foresight: String, patterns: String) {
 
         let periodsText = timePeriods.map { period in
             let snippets = period.samples.map { snippet -> String in
@@ -142,19 +142,40 @@ enum AnthropicClient {
         what does the data predict about where their story is heading? Be specific and personal, \
         not a generic horoscope.
 
+        [PATTERNS]
+        Identify recurring behavioral patterns visible in the messaging data. Split into two parts:
+
+        Destructive patterns:
+        2–3 specific patterns that show up repeatedly and tend to work against them — \
+        things like going quiet when overwhelmed, escalating conflict over text, \
+        dropping people suddenly, or leaning too hard on one person. \
+        Each pattern should be grounded in actual evidence from the messages, not inferred from personality.
+
+        Positive patterns:
+        2–3 specific patterns that show up repeatedly and tend to serve them well — \
+        things like checking in on people unprompted, de-escalating tension, \
+        being the one who keeps relationships alive, or showing up consistently. \
+        Same standard: evidence-based, specific to this person.
+
+        Be honest and direct. These should feel like genuine insights from someone who has \
+        read every message, not generic self-help observations.
+
+        Use exactly those five section headers ([ARCHETYPE], [PERSONALITY], [TIMELINE], [FORESIGHT], [PATTERNS]). Do not add any other text before [ARCHETYPE].
+
         IMPORTANT: Write in PG-13 language suitable for sharing. Never directly quote slurs or \
         offensive language — paraphrase the sentiment instead. If the same first name appears \
         more than once in the contact list, those are DIFFERENT people; use their message counts \
         and date ranges to distinguish which one is which.
         """
 
-        let text = try await post(prompt: prompt, model: sonnet, maxTokens: 7000, timeout: 300, endpoint: "life-analysis")
+        let text = try await post(prompt: prompt, model: sonnet, maxTokens: 9000, timeout: 300, endpoint: "life-analysis")
 
         return (
             archetype:   extractSection("ARCHETYPE",   nextMarker: "PERSONALITY", from: text),
             personality: extractSection("PERSONALITY", nextMarker: "TIMELINE",    from: text),
             timeline:    extractSection("TIMELINE",    nextMarker: "FORESIGHT",   from: text),
-            foresight:   extractSection("FORESIGHT",   nextMarker: nil,           from: text)
+            foresight:   extractSection("FORESIGHT",   nextMarker: "PATTERNS",    from: text),
+            patterns:    extractSection("PATTERNS",    nextMarker: nil,           from: text)
         )
     }
 

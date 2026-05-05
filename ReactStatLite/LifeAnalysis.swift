@@ -5,6 +5,7 @@ struct LifeAnalysis {
     let personality: String
     let timeline: String
     let foresight: String
+    let patterns: String
     let messageCount: Int
     let dateRange: String
     let warmth: Double

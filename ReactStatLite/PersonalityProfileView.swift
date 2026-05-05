@@ -223,6 +223,13 @@ struct YourPersonalitySheet: View {
                         content: analysis.foresight
                     )
 
+                    LifeSectionCard(
+                        icon: "arrow.triangle.2.circlepath",
+                        title: "Your Patterns",
+                        color: .teal,
+                        content: analysis.patterns
+                    )
+
                     LifeTraitBars(analysis: analysis)
 
                     Button("Regenerate") { onRegenerate() }
