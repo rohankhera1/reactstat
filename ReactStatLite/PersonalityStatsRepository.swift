@@ -30,8 +30,14 @@ enum PersonalityStatsRepository {
 
         // --- 1. Fetch messages from DB (sync, fast) ---
         let messagesBySender = try fetchMessagesBySender(chatRowId: chatRowId, limit: messageLimit)
+        let currentCount = messagesBySender.values.reduce(0) { $0 + $1.count }
 
-        // --- 2. Compute traits locally (parallel, no network) ---
+        // --- 2. Return from cache if message count hasn't changed significantly ---
+        if let cached = AnalysisCache.loadChatProfiles(chatRowId: chatRowId, currentMessageCount: currentCount) {
+            return cached
+        }
+
+        // --- 3. Compute traits locally ---
         struct PersonEntry {
             let name: String
             let count: Int
@@ -46,7 +52,7 @@ enum PersonalityStatsRepository {
             entries.append(PersonEntry(name: displayName, count: clean.count, traits: t, messages: clean))
         }
 
-        // --- 3. Call Claude sequentially to avoid concurrent-connection rate limits ---
+        // --- 4. Call Claude sequentially to avoid concurrent-connection rate limits ---
         var profiles: [PersonalityProfile] = []
         for entry in entries {
             let descriptor = try await AnthropicClient.generatePersonalityDescriptor(
@@ -65,11 +71,14 @@ enum PersonalityStatsRepository {
             ))
         }
 
-        return profiles.sorted {
+        let sorted = profiles.sorted {
             if $0.name == "You" { return true }
             if $1.name == "You" { return false }
             return $0.messageCount > $1.messageCount
         }
+
+        AnalysisCache.storeChatProfiles(sorted, chatRowId: chatRowId, messageCount: currentCount)
+        return sorted
     }
 
     // MARK: - Cross-chat "Your" profile
@@ -103,7 +112,7 @@ enum PersonalityStatsRepository {
 
     static func yourFullLifeAnalysis() async throws -> LifeAnalysis? {
 
-        // User's own messages — used for trait computation and date range only.
+        // User's own messages — traits, message count, date range.
         let userPairs = try fetchMyMessagesWithDates()
         let cleanedUser: [(text: String, date: Date)] = userPairs.compactMap { text, date in
             let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -111,39 +120,62 @@ enum PersonalityStatsRepository {
             return (t, date)
         }
         guard let traits = PersonalityAnalyzer.traits(for: cleanedUser.map { $0.text }) else { return nil }
+        let currentCount = cleanedUser.count
         let sortedUser = cleanedUser.sorted { $0.date < $1.date }
         let dateRange = formatDateRange(from: sortedUser.first!.date, to: sortedUser.last!.date)
 
-        // All messages with conversation context — used for the timeline.
-        let contextPairs = try fetchAllMessagesForContext()
-
-        // Real contacts from the DB (high precision).
         ContactNameCache.shared.warmIfNeeded()
-        let groupChats   = fetchGroupChatSummaries()
-        let topContacts  = fetchContactsWithTimeline(groupChats: groupChats)
-        let contactNames = topContacts.map { $0.name }
-        let timePeriods  = groupByTimePeriod(contextPairs.sorted { $0.date < $1.date },
-                                             prioritizingNames: contactNames)
 
-        let result = try await AnthropicClient.generateLifeAnalysis(
-            timePeriods: timePeriods,
-            topContacts: topContacts,
-            groupChats: groupChats,
-            totalMessages: cleanedUser.count,
-            dateRange: dateRange
-        )
+        // --- Main life analysis (load from cache or generate fresh) ---
+        let cachedMain = AnalysisCache.loadLifeAnalysis(currentMessageCount: currentCount)
+        let mainResult: (archetype: String, personality: String, timeline: String, foresight: String, patterns: String)
 
-        return LifeAnalysis(
-            archetype: result.archetype,
-            personality: result.personality,
-            timeline: result.timeline,
-            foresight: result.foresight,
-            patterns: result.patterns,
-            messageCount: cleanedUser.count, dateRange: dateRange,
+        if let cached = cachedMain {
+            mainResult = (cached.archetype, cached.personality, cached.timeline,
+                          cached.foresight, cached.patterns)
+        } else {
+            let contextPairs = try fetchAllMessagesForContext()
+            let groupChats   = fetchGroupChatSummaries()
+            let topContacts  = fetchContactsWithTimeline(groupChats: groupChats)
+            let contactNames = topContacts.map { $0.name }
+            let timePeriods  = groupByTimePeriod(contextPairs.sorted { $0.date < $1.date },
+                                                 prioritizingNames: contactNames)
+            mainResult = try await AnthropicClient.generateLifeAnalysis(
+                timePeriods: timePeriods,
+                topContacts: topContacts,
+                groupChats: groupChats,
+                totalMessages: currentCount,
+                dateRange: dateRange
+            )
+        }
+
+        // --- Relationship analyses (per-contact cache, generate any that are missing) ---
+        let topDMHandles = fetchTopDMHandles(limit: 5)
+        var relationships: [RelationshipAnalysis] = []
+        for (handle, name, dmCount) in topDMHandles {
+            if let cached = AnalysisCache.loadRelationship(name: name, currentDMCount: dmCount) {
+                relationships.append(cached)
+            } else if let rel = try? await buildRelationshipAnalysis(handle: handle,
+                                                                     name: name,
+                                                                     dmCount: dmCount) {
+                AnalysisCache.storeRelationship(rel, dmCount: dmCount)
+                relationships.append(rel)
+            }
+        }
+
+        let analysis = LifeAnalysis(
+            archetype: mainResult.archetype, personality: mainResult.personality,
+            timeline: mainResult.timeline, foresight: mainResult.foresight,
+            patterns: mainResult.patterns,
+            messageCount: currentCount, dateRange: dateRange,
             warmth: traits.warmth, expressiveness: traits.expressiveness,
             verbosity: traits.verbosity, curiosity: traits.curiosity,
-            enthusiasm: traits.enthusiasm, lexicalRichness: traits.lexical
+            enthusiasm: traits.enthusiasm, lexicalRichness: traits.lexical,
+            relationships: relationships
         )
+
+        if cachedMain == nil { AnalysisCache.storeLifeAnalysis(analysis, messageCount: currentCount) }
+        return analysis
     }
 
     // MARK: - SQL helpers
@@ -714,6 +746,173 @@ enum PersonalityStatsRepository {
         .sorted { $0.members.count > $1.members.count }
         .prefix(15)
         .map { $0 }
+    }
+
+    // MARK: - Relationship analysis
+
+    // Returns top DM contacts: handle (for SQL), display name, and DM message count.
+    private static func fetchTopDMHandles(limit: Int) -> [(handle: String, name: String, dmCount: Int)] {
+        guard let db = try? openDB() else { return [] }
+        defer { if db != nil { sqlite3_close(db) } }
+
+        let sql = """
+        WITH dm_chats AS (
+            SELECT chat_id FROM chat_handle_join GROUP BY chat_id HAVING COUNT(*) = 1
+        )
+        SELECT h.id,
+               COUNT(DISTINCT CASE
+                   WHEN cmj.chat_id IN (SELECT chat_id FROM dm_chats)
+                   THEN m.ROWID END) AS dm_count
+        FROM handle h
+        JOIN message m ON m.handle_id = h.ROWID
+        JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+        WHERE m.associated_message_guid IS NULL
+          AND m.text IS NOT NULL AND m.text != ''
+        GROUP BY h.id
+        HAVING dm_count > 0
+        ORDER BY dm_count DESC
+        LIMIT 50;
+        """
+
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+        defer { sqlite3_finalize(stmt) }
+
+        struct Row { let handle: String; let dmCount: Int }
+        var rows: [Row] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            guard let c = sqlite3_column_text(stmt, 0) else { continue }
+            rows.append(Row(handle: String(cString: c), dmCount: Int(sqlite3_column_int(stmt, 1))))
+        }
+
+        // Resolve names; merge duplicate handles for the same person; require ≥20 DMs.
+        var seen: Set<String> = []
+        var result: [(handle: String, name: String, dmCount: Int)] = []
+        for row in rows where row.dmCount >= 20 {
+            let name = ContactNameCache.shared.resolve(row.handle)
+            guard name != row.handle, !name.isEmpty, !seen.contains(name) else { continue }
+            seen.insert(name)
+            result.append((row.handle, name, row.dmCount))
+            if result.count >= limit { break }
+        }
+        return result
+    }
+
+    // Fetches all DM messages with a specific handle (both sides), ordered chronologically.
+    private static func fetchDMMessages(handle: String) throws -> [(text: String, isFromMe: Bool, date: Date)] {
+        let db = try openDB()
+        defer { if db != nil { sqlite3_close(db) } }
+
+        let sql = """
+        WITH dm_chats AS (
+            SELECT chj.chat_id
+            FROM chat_handle_join chj
+            JOIN handle h ON h.ROWID = chj.handle_id
+            WHERE h.id = ?
+            GROUP BY chj.chat_id
+            HAVING COUNT(*) = 1
+        )
+        SELECT m.text, m.is_from_me, m.date
+        FROM message m
+        JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+        WHERE cmj.chat_id IN (SELECT chat_id FROM dm_chats)
+          AND m.text IS NOT NULL AND m.text != ''
+          AND m.associated_message_guid IS NULL
+        ORDER BY m.date ASC;
+        """
+
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw NSError(domain: "ReactStatLite", code: 906,
+                          userInfo: [NSLocalizedDescriptionKey: String(cString: sqlite3_errmsg(db))])
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        var out: [(text: String, isFromMe: Bool, date: Date)] = []
+        // Use withCString + SQLITE_TRANSIENT so SQLite copies the bytes immediately.
+        handle.withCString { cStr in
+            _ = sqlite3_bind_text(stmt, 1, cStr, -1,
+                unsafeBitCast(-1 as Int, to: sqlite3_destructor_type.self))
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                guard let textC = sqlite3_column_text(stmt, 0) else { return }
+                let text = String(cString: textC)
+                guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                let isFromMe = sqlite3_column_int(stmt, 1) == 1
+                let rawDate = sqlite3_column_int64(stmt, 2)
+                let secs = rawDate > 1_000_000_000 ? Double(rawDate) / 1_000_000_000 : Double(rawDate)
+                out.append((text: text, isFromMe: isFromMe,
+                             date: Date(timeIntervalSinceReferenceDate: secs)))
+            }
+        }
+        return out
+    }
+
+    // Computes local stats + calls Claude for a relationship narrative.
+    private static func buildRelationshipAnalysis(
+        handle: String,
+        name: String,
+        dmCount: Int
+    ) async throws -> RelationshipAnalysis {
+
+        let messages = try fetchDMMessages(handle: handle)
+        guard messages.count >= 20 else {
+            throw NSError(domain: "ReactStatLite", code: 907,
+                          userInfo: [NSLocalizedDescriptionKey: "Not enough DM messages for \(name)"])
+        }
+
+        let userMsgs    = messages.filter { $0.isFromMe }
+        let contactMsgs = messages.filter { !$0.isFromMe }
+
+        func avgWords(_ msgs: [(text: String, isFromMe: Bool, date: Date)]) -> Double {
+            guard !msgs.isEmpty else { return 0 }
+            let total = msgs.reduce(0) { $0 + $1.text.split(separator: " ").count }
+            return Double(total) / Double(msgs.count)
+        }
+
+        // Conversation initiation: gap > 2 hours = new session.
+        var userInitiated = 0
+        var totalSessions = 0
+        var prevDate: Date? = nil
+        for msg in messages {
+            if prevDate.map({ msg.date.timeIntervalSince($0) > 7200 }) ?? true {
+                totalSessions += 1
+                if msg.isFromMe { userInitiated += 1 }
+            }
+            prevDate = msg.date
+        }
+        let initiationPct = totalSessions > 0 ? Double(userInitiated) / Double(totalSessions) : 0.5
+        let userAvgW   = avgWords(userMsgs)
+        let contactAvgW = avgWords(contactMsgs)
+        let msgDateRange = formatDateRange(from: messages.first!.date, to: messages.last!.date)
+
+        // Stratified sample: up to 80 messages evenly spread across the history.
+        let sampleSize = min(80, messages.count)
+        let step = max(1, messages.count / sampleSize)
+        let sample: [(text: String, isFromMe: Bool)] = (0..<sampleSize).compactMap { i in
+            let idx = i * step
+            guard idx < messages.count else { return nil }
+            return (String(messages[idx].text.prefix(100)), messages[idx].isFromMe)
+        }
+
+        let (dynamic, investment) = try await AnthropicClient.generateRelationshipAnalysis(
+            contactName: name,
+            sampleMessages: sample,
+            userSent: userMsgs.count,
+            contactSent: contactMsgs.count,
+            userAvgWords: userAvgW,
+            contactAvgWords: contactAvgW,
+            userInitiationPct: initiationPct,
+            dateRange: msgDateRange
+        )
+
+        return RelationshipAnalysis(
+            contactName: name,
+            userSent: userMsgs.count, contactSent: contactMsgs.count,
+            userAvgWords: userAvgW, contactAvgWords: contactAvgW,
+            userInitiationPct: initiationPct,
+            dateRange: msgDateRange,
+            dynamic: dynamic, investment: investment
+        )
     }
 
     // MARK: - Demo

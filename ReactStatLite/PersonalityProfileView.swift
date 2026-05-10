@@ -230,6 +230,17 @@ struct YourPersonalitySheet: View {
                         content: analysis.patterns
                     )
 
+                    if !analysis.relationships.isEmpty {
+                        Text("Key Relationships")
+                            .font(.headline)
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 4)
+
+                        ForEach(analysis.relationships, id: \.contactName) { rel in
+                            RelationshipCard(rel: rel)
+                        }
+                    }
+
                     LifeTraitBars(analysis: analysis)
 
                     Button("Regenerate") { onRegenerate() }
@@ -318,25 +329,116 @@ private struct LifeTraitBars: View {
     }
 }
 
+// MARK: - Relationship card
+
+struct RelationshipCard: View {
+    let rel: RelationshipAnalysis
+
+    private var totalSent: Int { rel.userSent + rel.contactSent }
+    private var userFraction: Double {
+        totalSent > 0 ? min(1, max(0, Double(rel.userSent) / Double(totalSent))) : 0.5
+    }
+    private var firstName: String { rel.contactName.components(separatedBy: " ").first ?? rel.contactName }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+
+            // Name + date range
+            HStack {
+                Text(rel.contactName).font(.headline)
+                Spacer()
+                Text(rel.dateRange).font(.caption2).foregroundStyle(.tertiary)
+            }
+
+            // Sent/received split bar
+            VStack(alignment: .leading, spacing: 4) {
+                GeometryReader { geo in
+                    HStack(spacing: 0) {
+                        Rectangle()
+                            .fill(Color.blue.opacity(0.65))
+                            .frame(width: geo.size.width * userFraction)
+                        Rectangle()
+                            .fill(Color.purple.opacity(0.45))
+                    }
+                }
+                .frame(height: 6)
+                .clipShape(Capsule())
+
+                HStack {
+                    Circle().fill(Color.blue.opacity(0.65)).frame(width: 7, height: 7)
+                    Text("You · \(rel.userSent) msgs").font(.caption2).foregroundStyle(.secondary)
+                    Spacer()
+                    Text("\(firstName) · \(rel.contactSent) msgs").font(.caption2).foregroundStyle(.secondary)
+                    Circle().fill(Color.purple.opacity(0.45)).frame(width: 7, height: 7)
+                }
+            }
+
+            // Stat chips
+            HStack(spacing: 6) {
+                RelStatChip("~\(Int(rel.userAvgWords))w you", color: .blue)
+                RelStatChip("~\(Int(rel.contactAvgWords))w them", color: .purple)
+                RelStatChip("\(Int(rel.userInitiationPct * 100))% you start", color: .orange)
+            }
+
+            // Claude-generated sections
+            Text(rel.dynamic)
+                .font(.subheadline)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text(rel.investment)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .italic()
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.thinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(.quaternary, lineWidth: 1)
+        )
+    }
+}
+
+private struct RelStatChip: View {
+    let label: String
+    let color: Color
+
+    init(_ label: String, color: Color) { self.label = label; self.color = color }
+
+    var body: some View {
+        Text(label)
+            .font(.caption2)
+            .foregroundStyle(color)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(color.opacity(0.12))
+            .clipShape(Capsule())
+    }
+}
+
 // MARK: - Life analysis loading card
 
 struct LifeAnalysisLoadingCard: View {
     @State private var elapsed: Int = 0
 
-    // Approximate which stage we're in based on elapsed time.
     private var stageText: String {
         switch elapsed {
-        case 0..<3:  return "Reading your full message history…"
-        case 3..<7:  return "Grouping messages by time period…"
-        default:     return "Claude Sonnet is writing your analysis…"
+        case 0..<3:   return "Reading your full message history…"
+        case 3..<7:   return "Grouping messages by time period…"
+        case 7..<130: return "Claude Sonnet is writing your analysis…"
+        default:      return "Analyzing your key relationships…"
         }
     }
 
-    // Count down from an estimated 120-second Sonnet call that starts around 7s in.
+    // Estimated total: ~120s Sonnet + ~30s for relationship analyses.
     private var timeRemainingText: String {
         guard elapsed >= 7 else { return "" }
         let claudeElapsed = elapsed - 7
-        let remaining = 120 - claudeElapsed
+        let remaining = 150 - claudeElapsed
         if remaining > 0 { return "~\(remaining)s remaining" }
         return "finishing up…"
     }

@@ -14,6 +14,19 @@ struct LifeAnalysis {
     let curiosity: Double
     let enthusiasm: Double
     let lexicalRichness: Double
+    let relationships: [RelationshipAnalysis]
+}
+
+struct RelationshipAnalysis {
+    let contactName: String
+    let userSent: Int
+    let contactSent: Int
+    let userAvgWords: Double
+    let contactAvgWords: Double
+    let userInitiationPct: Double   // 0.0 – 1.0
+    let dateRange: String
+    let dynamic: String             // Claude-generated
+    let investment: String          // Claude-generated, 1 sentence
 }
 
 struct TimePeriod {
@@ -23,9 +36,9 @@ struct TimePeriod {
 
 struct ContactSummary {
     let name: String
-    let messageCount: Int     // total (DM + group)
-    let dmMessageCount: Int   // 1:1 messages only — strongest closeness signal
-    let firstSeen: String     // e.g. "Q3 2021"
-    let lastSeen: String      // e.g. "Q1 2024" or "present"
+    let messageCount: Int
+    let dmMessageCount: Int
+    let firstSeen: String
+    let lastSeen: String
     let sharedGroupChats: Int
 }

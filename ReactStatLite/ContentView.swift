@@ -146,7 +146,11 @@ struct ContentView: View {
                             analysis: yourAnalysis,
                             isLoading: loadingYourProfile,
                             error: yourProfileError,
-                            onRegenerate: { loadYourProfile() }
+                            onRegenerate: {
+                                AnalysisCache.clearLifeAnalysis()
+                                AnalysisCache.clearRelationships()
+                                loadYourProfile()
+                            }
                         )
                     }
                 }

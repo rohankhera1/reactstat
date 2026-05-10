@@ -179,6 +179,54 @@ enum AnthropicClient {
         )
     }
 
+    // Returns (dynamic, investment) for a 1:1 relationship.
+    static func generateRelationshipAnalysis(
+        contactName: String,
+        sampleMessages: [(text: String, isFromMe: Bool)],
+        userSent: Int,
+        contactSent: Int,
+        userAvgWords: Double,
+        contactAvgWords: Double,
+        userInitiationPct: Double,
+        dateRange: String
+    ) async throws -> (dynamic: String, investment: String) {
+
+        let msgSample = sampleMessages
+            .map { "\($0.isFromMe ? "You" : contactName): \($0.text)" }
+            .joined(separator: "\n")
+
+        let prompt = """
+        Analyze this 1:1 iMessage relationship using real data.
+
+        Stats:
+        - You sent \(userSent) messages (avg \(String(format: "%.1f", userAvgWords)) words each)
+        - \(contactName) sent \(contactSent) messages (avg \(String(format: "%.1f", contactAvgWords)) words each)
+        - You initiate \(Int(userInitiationPct * 100))% of conversations
+        - Active: \(dateRange)
+
+        Sample messages:
+        \(msgSample)
+
+        [DYNAMIC]
+        2–3 sentences: What is the energy and structure of this relationship? \
+        Who leads, who follows, what do they bond over, how do they communicate?
+
+        [INVESTMENT]
+        1 sentence: Who invests more — in frequency, length, initiation — \
+        and what does that asymmetry (or balance) suggest about where each person stands?
+
+        Be specific and grounded in the data above. No generic observations. \
+        Write in PG-13 language.
+        """
+
+        let text = try await post(prompt: prompt, model: haiku, maxTokens: 320, endpoint: "personality")
+
+        return (
+            dynamic:    extractSection("DYNAMIC",    nextMarker: "INVESTMENT", from: text),
+            investment: extractSection("INVESTMENT", nextMarker: nil,          from: text)
+        )
+    }
+
     // MARK: - Shared HTTP helper
 
     private static func post(prompt: String, model: String, maxTokens: Int, timeout: TimeInterval = 60, endpoint: String) async throws -> String {
